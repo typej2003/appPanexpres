@@ -4,59 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BarcoExpres Tracker</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="manifest" href="manifest.json">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         #status { font-weight: bold; }
         .online { color: green; }
         .offline { color: red; }
+        body { background-color: #f8f9fa; }
     </style>
-
-    <script src="https://cdn.onesignal.com/sdks/OneSignalSDK.js" defer></script>
-    <script>
-    window.OneSignal = window.OneSignal || [];
-    OneSignal.push(function() {
-        OneSignal.init({
-        appId: "TU_APP_ID_AQUI",
-        });
-        
-        // Cuando el usuario se suscribe, enviamos el ID a Laravel
-        OneSignal.getUserId(function(userId) {
-            if(userId) {
-                actualizarPushIdEnServidor(userId);
-            }
-        });
-    });
-
-    async function actualizarPushIdEnServidor(pushId) {
-        const token = localStorage.getItem('user_token');
-        if(!token) return;
-
-        await fetch('https://www.barcoexpres.com/api/update-push-id', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ onesignal_id: pushId })
-        });
-    }
-    </script>
 </head>
-<body class="bg-light">
-    <div class="container mt-5 text-center">
-        <div class="card shadow">
-            <div class="card-body">
-                <h2>Rastreo BarcoExpres</h2>
-                <hr>
-                <div id="status" class="mb-3">Estado: <span class="offline">Inactivo</span></div>
-                <div id="coords" class="small text-muted mb-4">Lat: -- | Lng: --</div>
-                
-                <button id="btnStart" class="btn btn-primary btn-lg w-100 mb-2">Iniciar Viaje</button>
-                <button id="btnStop" class="btn btn-danger btn-lg w-100" disabled>Detener</button>
-            </div>
-        </div>
-    </div>
+<body>
 
     <div id="login-screen" class="container mt-5">
         <div class="card shadow-lg p-4">
@@ -74,9 +31,27 @@
         </div>
     </div>
 
+    <div id="tracker-screen" class="container mt-5 text-center d-none">
+        <div class="card shadow">
+            <div class="card-body">
+                <h2>Rastreo BarcoExpres</h2>
+                <hr>
+                <div id="status" class="mb-3">Estado: <span class="offline">Inactivo</span></div>
+                <div id="coords" class="small text-muted mb-4">
+                    Lat: <span id="lat">--</span> | Lng: <span id="lng">--</span>
+                </div>
+                
+                <button id="btnStart" class="btn btn-primary btn-lg w-100 mb-2">Iniciar Viaje</button>
+                <button id="btnStop" class="btn btn-danger btn-lg w-100 mb-3" disabled>Detener</button>
+                
+                <button onclick="logout()" class="btn btn-outline-secondary btn-sm w-100">Cerrar Sesión</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // --- LÓGICA DE LOGIN ---
         async function login() {
-            
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             const errorDiv = document.getElementById('login-error');
@@ -85,22 +60,15 @@
                 const response = await fetch('https://www.barcoexpres.com/api/login', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-                    body: JSON.stringify({ 
-                        email: email, 
-                        password: password,
-                        device_name: navigator.userAgent // Esto identifica el navegador/celular
-                    })
+                    body: JSON.stringify({ email, password, device_name: navigator.userAgent })
                 });
 
-                
-                // Después de un login exitoso
                 const data = await response.json();
                 
-                
                 if (response.ok) {
-                    localStorage.setItem('user_token', data.token); // Guardamos el token
+                    localStorage.setItem('user_token', data.token);
                     document.getElementById('login-screen').classList.add('d-none');
-                    document.getElementById('tracker-screen').classList.remove('d-none'); // Mostramos el panel de GPS
+                    document.getElementById('tracker-screen').classList.remove('d-none');
                 } else {
                     errorDiv.innerText = "Credenciales incorrectas.";
                 }
@@ -111,86 +79,37 @@
 
         async function logout() {
             const token = localStorage.getItem('user_token');
-
             try {
-                // 1. Avisar al servidor para eliminar el token
                 await fetch('https://www.barcoexpres.com/api/logout', {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Accept': 'application/json'
-                    }
+                    headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
                 });
-            } catch (e) {
-                console.log("Error al avisar al servidor, igual cerraremos sesión localmente.");
-            }
+            } catch (e) { console.log("Logout local."); }
 
-            // 2. Limpiar datos locales
             localStorage.removeItem('user_token');
-            
-            // 3. Regresar a la pantalla de login
-            document.getElementById('tracker-screen').classList.add('d-none');
-            document.getElementById('login-screen').classList.remove('d-none');
-            
-            // Opcional: Recargar para limpiar variables de memoria
             location.reload();
         }
 
-    </script>
-
-    <script>
+        // --- LÓGICA GPS ---
         let watchId = null;
-        const userId = 5; // Esto vendrá del login después
-        
-        const gpsOptions = {
-            enableHighAccuracy: true, // Intenta usar satélites
-            timeout: 15000,           // Espera hasta 15 segundos antes de dar error
-            maximumAge: 0             // Fuerza a que la posición sea nueva, no de caché
-        };
+        const gpsOptions = { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 };
 
         document.getElementById('btnStart').addEventListener('click', () => {
             if ("geolocation" in navigator) {
-                // ... (tu código de botones) ...
                 document.getElementById('btnStart').disabled = true;
                 document.getElementById('btnStop').disabled = false;
                 document.querySelector('#status span').innerText = "Rastreando...";
                 document.querySelector('#status span').className = "online";
                 
-                watchId = navigator.geolocation.watchPosition(sendData, (error) => {
-                    if (error.code === 2) {
-                        console.log("Reintentando... el sensor está tardando en responder.");
-                        // No detenemos el proceso, dejamos que siga intentando
-                    } else {
-                        errorGps(error);
-                    }
-                }, gpsOptions);
+                watchId = navigator.geolocation.watchPosition(sendData, errorGps, gpsOptions);
             }
         });
 
-        // document.getElementById('btnStart').addEventListener('click', () => {
-        //     if ("geolocation" in navigator) {
-        //         document.getElementById('btnStart').disabled = true;
-        //         document.getElementById('btnStop').disabled = false;
-        //         document.querySelector('#status span').innerText = "Rastreando...";
-        //         document.querySelector('#status span').className = "online";
-
-        //         // WatchPosition actualiza cada vez que el GPS detecta movimiento
-        //         watchId = navigator.geolocation.watchPosition(sendData, errorGps, {
-        //             enableHighAccuracy: false, // Menos preciso pero más rápido si estás bajo techo
-        //             timeout: 10000,            // Esperar máximo 10 segundos
-        //             maximumAge: 0              // No usar ubicaciones viejas de caché
-        //         });
-        //     }
-        // });
-
         async function sendData(position) {
-            
             document.getElementById('lat').innerText = position.coords.latitude.toFixed(6);
             document.getElementById('lng').innerText = position.coords.longitude.toFixed(6);
 
             const token = localStorage.getItem('user_token');
-            
-            // 1. CREAMOS el objeto con la ubicación actual
             const nuevaUbicacion = {
                 lat: position.coords.latitude,
                 lng: position.coords.longitude,
@@ -198,17 +117,11 @@
                 recorded_at: new Date().toISOString()
             };
 
-            // 2. OBTENEMOS la cola existente y añadimos la nueva ubicación
             let pendientes = JSON.parse(localStorage.getItem('gps_queue') || "[]");
             pendientes.push(nuevaUbicacion);
 
-            // 3. VALIDAMOS si hay algo que enviar y si hay internet
-            if (pendientes.length === 0) return;
-
-            if (navigator.onLine && token) {
+            if (navigator.onLine && token && pendientes.length > 0) {
                 try {
-                    console.log("Intentando sincronizar " + pendientes.length + " puntos...");
-                    
                     const response = await fetch('https://www.barcoexpres.com/api/data-batch', {
                         method: 'POST',
                         headers: {
@@ -220,37 +133,29 @@
                     });
 
                     if (response.ok) {
-                        // Si el servidor responde 200 OK, borramos la cola
                         localStorage.removeItem('gps_queue');
-                        console.log("✅ Sincronización exitosa.");
-                    } else {
-                        // Si el servidor da error (ej. 500), mantenemos los datos para reintentar
-                        console.error("❌ Error en el servidor, guardando puntos para reintento.");
-                        localStorage.setItem('gps_queue', JSON.stringify(pendientes));
+                        console.log("Sincronizado");
                     }
                 } catch (e) {
-                    // Si falla la conexión (pérdida de señal), guardamos
-                    console.warn("📡 Sin conexión. Puntos acumulados: " + pendientes.length);
                     localStorage.setItem('gps_queue', JSON.stringify(pendientes));
                 }
             } else {
-                // Si no hay internet o no ha iniciado sesión, solo acumulamos
                 localStorage.setItem('gps_queue', JSON.stringify(pendientes));
             }
         }
         
-        function errorGps(err) { console.warn('ERROR(' + err.code + '): ' + err.message); }
+        function errorGps(err) { console.warn('Error GPS:', err.message); }
 
         document.getElementById('btnStop').addEventListener('click', () => {
-            navigator.geolocation.clearWatch(watchId);
-            location.reload(); // Reinicia la app
+            if(watchId) navigator.geolocation.clearWatch(watchId);
+            location.reload();
         });
     </script>
-    
+
     <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
     <script>
         window.OneSignalDeferred = window.OneSignalDeferred || [];
-            OneSignalDeferred.push(async function(OneSignal) {
+        OneSignalDeferred.push(async function(OneSignal) {
             await OneSignal.init({
                 appId: "93091eb2-a0b0-44c0-99ff-bedc721195a4",
             });
